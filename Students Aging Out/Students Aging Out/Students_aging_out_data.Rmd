@@ -1,0 +1,368 @@
+---
+title: "Students Aging Out"
+output: html_document
+---
+
+```{r}
+options(java.parameters = "-Xmx8048m")
+library(silounloadr)
+library(tidyverse)
+library(lubridate)
+library(shiny)
+library(shinydashboard)
+library(DT)
+library(devtools)
+library(kippcolors)
+library(formattable)
+library(googleCloudStorageR)
+library(googleAuthR)
+library(bigrquery)
+
+gcs_auth_file <- Sys.getenv("GCS_AUTH_FILE")
+bq_auth_file <-Sys.getenv("BQ_AUTH_FILE")
+bq_project <- Sys.getenv("BQ_PROJECT")
+cat(sprintf("BQ_AUTH_FILE is %s", bq_auth_file))
+bigrquery::set_service_token(bq_auth_file)
+bigrquery::bq_auth(bq_auth_file)
+
+```
+
+```{r, school}
+school_name <- tribble(
+  ~schoolid, ~school_abbreviation,
+  78102, "KAP",
+  4001802, "KOP",
+  400180, "KOA",
+  7810, "KAMS",
+  400146, "KAC",
+  4001462, "KACP",
+  400163, "KBCP",
+  4001632, "KBP"
+)
+```
+
+
+```{r, terms}
+#calculate first year of academic year using silounloadr
+current_first_year <- calc_academic_year(today(), format = "first_year") 
+
+# calculate last year of academic year
+current_last_year <- calc_academic_year(today(), format = "second_year") 
+
+#calculate term ID
+ps_termid <- calc_ps_termid(current_first_year)
+
+# #get PS terms       
+terms <- get_powerschool("terms") %>%
+  filter(id >= ps_termid) %>% #uncomment out when school year starts
+  select(id,
+         abbreviation,
+         firstday,
+         lastday,
+         schoolid) %>%
+  collect()
+
+#find current SY quarter terms
+current_q_dates <- terms %>%
+  select(-schoolid) %>%
+  filter(grepl("Q", abbreviation)) %>%
+  mutate(q_number = str_extract(abbreviation, "\\d")) %>%
+  group_by(q_number, 
+           firstday, 
+           lastday) %>%
+  summarise() %>%
+  as.data.frame() %>%
+  mutate(q_interval = interval(firstday, lastday))
+
+q_dates_no_interval <- current_q_dates %>%
+  select(-q_interval)
+
+#identify last day of school
+last_school_day <- q_dates_no_interval %>% 
+  filter(q_number == 4) %>%
+  select(lastday)
+
+#identify first day of school 
+first_school_day <- q_dates_no_interval %>%
+  filter(q_number == 1) %>%
+  select(firstday)
+
+#function to ID quarter given a date
+identify_quarter <- . %>%
+  purrr::map(function(x) x %within% current_q_dates$q_interval) %>% 
+  purrr::map(function(x) which(x)) %>%
+  as.double()
+
+#identify the quarter we're in
+ date_within_quarter <- today() %>%   # uncomment out when school starts
+  identify_quarter()
+
+#identify the current quarter interval dates
+id_q_dates <- q_dates_no_interval %>%
+  filter(q_number %in% c(date_within_quarter - 1, date_within_quarter))
+
+#if it's Q1 first day should be first day of the school year, otherwise first
+#day of the previous quarter
+if(date_within_quarter == 1){
+  past_q_firstday <- id_q_dates %>%
+    select(firstday)
+} else {
+  past_q_firstday <- id_q_dates %>%
+    filter(q_number %in% c(date_within_quarter -1)) %>%
+    select(firstday)  
+}
+
+#identify the last day of the current quarter
+current_q_lastday <- id_q_dates %>%
+  filter(q_number %in% date_within_quarter) %>%
+  select(lastday)
+
+current_q_firstday <- id_q_dates %>%
+  filter(q_number %in% date_within_quarter) %>%
+  select(firstday)
+
+current_q_dates <- current_q_dates %>%
+  mutate(q_interval = interval(firstday, lastday))
+
+today_date <- today()
+
+next_year <- calc_academic_year(today_date, 'second_year')
+
+start_next_school_year <- paste(next_year, "09", "01", sep = "-")
+
+
+```
+
+
+```{r, powerschool tables}
+students <- get_powerschool("students") %>% 
+  filter(enroll_status == 0) %>%
+  select(studentid = id,
+         student_number, 
+         first_name,
+         last_name,
+         grade_level,
+         enroll_status,
+         dob,
+         schoolid,
+         home_room) %>%
+  collect()
+
+#get cc table
+cc <- get_powerschool("cc") %>%
+  collect()
+
+# unique cc table
+cc_unique <- cc %>%
+  filter(termid %in% c(ps_termid, (-1*ps_termid))) %>%
+  select(course_number,
+         section_number,
+         sectionid) %>%
+  unique()
+
+enrollments <- get_powerschool("ps_enrollment_all") %>% 
+  select(studentid,
+         schoolid,
+         entrydate,
+         exitdate,
+         exitcode,
+         yearid) %>%
+  collect() %>% 
+  mutate(entrydate = as_date(entrydate)) %>%
+  group_by(studentid,
+           schoolid) %>%
+  filter(entrydate == min(entrydate)) %>%
+  ungroup()
+
+```
+
+
+```{r illuminate tables}
+# get gradebooks
+gradebooks <- get_illuminate("gradebooks", schema = "gradebook") %>% 
+  filter(academic_year == current_last_year) %>% 
+  select(gradebook_id,
+         created_by,
+         gradebook_name, 
+         active,
+         is_deleted,
+         academic_year) %>%
+  collect() 
+
+# get illuminate students
+ill_students <- get_illuminate("students", "public") %>%
+  select(student_id,
+         local_student_id) %>%
+  collect()
+
+#get sections corresponding to grade books
+gradebook_sections <- get_illuminate("gradebook_section_course_aff", schema = "gradebook") %>%
+  select(gradebook_id,
+         ill_sec_id = section_id,
+         user_id) %>%
+  collect()
+
+#Illuminate sections
+illuminate_sec <- get_illuminate("sections",
+                                 "public") %>%
+  select(ill_sec_id = section_id,
+         ps_sec_id = local_section_id) %>%
+  collect()
+
+illuminate_teacher_sec <- get_illuminate("section_teacher_aff",
+                                         schema = "public") %>%
+  select(ill_sec_id = section_id,
+         sec_user = user_id,
+         primary_teacher) %>%
+  collect()
+
+# data frame with cutoffs for current quarter
+overall_grades <- get_illuminate("overall_score_cache", schema = "gradebook") %>%
+  filter(timeframe_end_date <= !!current_q_lastday$lastday, # 3/24
+         timeframe_start_date >= !!current_q_firstday$firstday) %>% # 1/14       
+  select(gradebook_id,
+         calculated_at,
+         mark,
+         percentage,
+         student_id,
+         timeframe_end_date,
+         timeframe_start_date) %>%
+  collect(n= Inf)
+
+overall_grades_recent <- overall_grades  %>%
+  group_by(gradebook_id,
+           student_id,
+           timeframe_start_date,
+           timeframe_end_date) %>%
+  filter(calculated_at == max(calculated_at))
+
+```
+
+```{r combining tables}
+grades_gb_name <- overall_grades_recent %>%
+  filter(!is.na(mark)) %>%
+  left_join(gradebooks,
+            by = "gradebook_id") %>%
+  left_join(gradebook_sections %>%
+              unique(),
+            by = c("gradebook_id",
+                   "created_by" = "user_id")) %>% 
+  left_join(illuminate_sec,
+            by = "ill_sec_id") %>%
+  left_join(ill_students %>%
+              mutate(student_number = as.double(local_student_id)),
+            by = "student_id") 
+
+grades_sections <- grades_gb_name %>%
+  mutate(ps_sec_id = as.integer(ps_sec_id)) %>%
+  left_join(students,
+            by = "student_number") %>%
+  left_join(cc_unique,
+            by = c("ps_sec_id" = "sectionid"))
+
+students_sections <- students %>%
+  filter(enroll_status == 0) %>% 
+  left_join(cc %>%
+              select(dateenrolled,
+                     dateleft,
+                     sectionid,
+                     course_number,
+                     studentid),
+            by = "studentid") %>% 
+  filter(dateenrolled >= first_school_day$firstday) %>% 
+  mutate(status = if_else(sectionid < 0, "Previous Class", "Current Class")) 
+
+
+final_ela_math_science_grades <- grades_sections %>% 
+  left_join(school_name,
+            by = "schoolid") %>%
+  left_join(students_sections %>%
+              select(student_number,
+                     sectionid,
+                     status,
+                     dateleft),
+            by = c("student_number",
+                   "ps_sec_id" = "sectionid")) %>% 
+  filter(grepl("Math|Science|ELA|Reading|Sci", gradebook_name),
+         status == "Current Class", 
+         active == TRUE) %>% 
+  mutate(subject = ifelse(schoolid == 78102 & grade_level != 4,
+                           strsplit(gradebook_name, "\\.")[[1]][length(strsplit(gradebook_name, "\\.")[[1]])],
+                           strsplit(gradebook_name, "_")[[1]][length(strsplit(gradebook_name, "_")[[1]])])) %>% 
+  mutate(subject = gsub(" \\(1)", "", subject),
+         subject = gsub(" \\(2)", "", subject),
+         subject = gsub(" \\(3)", "", subject)) %>%
+  filter(nchar(subject) < 8) %>%
+  mutate(subject = ifelse(subject == "Reading", "ELA", subject)) %>%
+  ungroup() %>%
+  select(student_number,
+         subject,
+         mark,
+         percentage) %>% 
+  distinct(student_number, subject, .keep_all = TRUE) %>%
+  gather(key, value, -student_number, -subject) %>%  # creates a new column of the key (mark or percent) and their associated value
+  mutate(key = paste0(key, "_", subject)) %>% # makes the key column more descriptive by adding subject name 
+  select(-subject) %>% # gets rid of subject name column
+  spread(key, value) # spread by mark/percent and their associate value
+  
+final_ela_math_science_grades[,5:7] <- map(final_ela_math_science_grades[,5:7], parse_double)
+ # gather into value made percentage a character vector, put back to double so it rounds evenly
+
+```
+
+```{r aging out}
+students_date_15 <- students %>%
+  left_join(school_name, by = "schoolid") %>%
+  mutate(date_turns_15 = as.Date(dob + years(15)),
+         date_enters_eighth = paste(((7 - grade_level) + next_year), "09", "01", sep = "-"),
+         dob = as.character(dob)) %>%
+  left_join(enrollments %>% select(studentid,
+                         entrydate)) %>%
+  group_by(studentid, student_number, first_name, last_name, grade_level, enroll_status, dob, schoolid, home_room, school_abbreviation, date_turns_15, date_enters_eighth) %>%
+  summarise(entrydate = max(entrydate)) %>% 
+  ungroup()
+
+students_date_16 <- students %>%
+  left_join(school_name, by = "schoolid") %>%
+  mutate(date_turns_16 = as.Date(dob + years(16)),
+         date_enters_eighth = paste(((7 - grade_level) + next_year), "08", "15", sep = "-"),
+         date_finishes_eighth = 
+         dob = as.character(dob)) %>%
+  left_join(enrollments %>% select(studentid,
+                         entrydate)) %>%
+  group_by(studentid, student_number, first_name, last_name, grade_level, enroll_status, dob, schoolid, home_room, school_abbreviation, date_turns_16, date_enters_eighth) %>%
+  summarise(entrydate = max(entrydate)) %>% 
+  ungroup()
+```
+
+```{r}
+ students_date_16 %>% 
+  mutate(#date_enters_eighth = ymd(paste(8, 15, ((7 - grade_level) + next_year), sep = "/")),
+         date_enters_eighth = ymd(paste(((7 - grade_level) + next_year), 8, 15, sep = "/")),
+         date_leaves_eighth = ymd(paste(((8 - grade_level) + next_year), 6, 20, sep = "-")),
+         entrydate = paste(months(as.Date(entrydate)), year(as.Date(entrydate)), sep = " ")) %>% 
+  filter(grade_level < 8,
+         date_turns_16 <= date_leaves_eighth ) %>%
+      select("Student Number" = student_number, 
+             "First Name" = first_name, 
+             "Last Name" = last_name, 
+             "Grade Level" = grade_level,
+             "School Abbreviation" = school_abbreviation,
+             "Homeroom" = home_room,
+             "Date of Birth" = dob,
+             "Date Student Turns 16" = date_turns_16,
+             "Projected Eiggth Grade Entry Date" = date_enters_eighth,
+             "Projected Eighth Grade Exit Date" = date_leaves_eighth) %>% View()
+        #     "Date Student Entered KIPP" = entrydate) %>% View()
+```
+
+
+```{r}
+#gcs_global_bucket("idea_students_aging_out")
+
+```
+
+```{r}
+#gcs_results <- gcs_save(final_ela_math_science_grades, students_date_16, file = "ps_students_aging_out.Rda") 
+```
+
