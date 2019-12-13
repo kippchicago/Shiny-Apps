@@ -1,0 +1,99 @@
+.skin-blue .main-header .logo {
+        background-color: #BCD631;
+        color: #FFF;
+        }
+
+.skin-blue .main-header .navbar {
+    background-color: #439539;
+}
+
+/* Sidebar stuff */
+.skin-blue .left-side,
+.skin-blue .main-sidebar,
+.skin-blue .wrapper {
+    background-color: #FFF;
+}
+.control-label {
+  color: #8D8685;
+}
+
+.skin-blue .sidebar-menu>li.active>a{
+    color: #8D8685;
+    background: #F4EFEB;
+    border-left-color: #BCD631;
+}
+.skin-blue .sidebar-menu>li:hover>a {
+    color: #8D8685;
+    background: #CFCCC1;
+    border-left-color: #BCD631;
+}
+
+
+.content {
+  background-color: #F4EFEB;
+}
+
+/* Primary box */
+.box.box-primary {
+    border-top-color: #439539;
+}
+
+.box.box-solid.box-primary  {
+    border: #439539;
+    border-top-color: #439539;
+}
+
+.box.box-solid.box-primary .box-header {
+    color: #fff;
+    background: #439539;
+    background-color: #439539;
+    border: #439539;
+}
+
+
+/* Warning box */
+.box.box-solid.box-warning  {
+    border: #FEBC11;
+}
+/* Warning box */
+.box.box-solid.box-warning .box-header {
+    color: #fff;
+    background: #FEBC11;
+    background-color: #FEBC11;
+    border: #FEBC11;
+}
+
+/* Success box */
+.box.box-solid.box-success  {
+    border: #439539;
+}
+/* Success box */
+.box.box-solid.box-success .box-header {
+    color: #fff;
+    background: #439539;
+    background-color: #439539;
+    border: #439539;
+}
+
+/* Success box */
+.box.box-solid.box-info  {
+    border: #A7CFEE;
+}
+/* Success box */
+.box.box-solid.box-success .box-info {
+    color: #fff;
+    background: #A7CFEE;
+    background-color: #A7CFEE;
+    border: #A7CFEE;
+}
+
+/* checkbox and radio labels */
+.checkbox label, .radio label {
+    min-height: 20px;
+    padding-left: 20px;
+    margin-bottom: 0;
+    font-weight: 400;
+    cursor: pointer;
+    color: black;
+}
+
